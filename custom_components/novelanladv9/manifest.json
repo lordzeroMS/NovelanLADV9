@@ -1,12 +1,12 @@
 {
   "domain": "novelanladv9",
   "name": "Novelan LADV9 Heat Pump",
-  "version": "0.0.1",
-  "config_flow": true,
-  "documentation": "https://github.com/lordzeroMS/novelanladv9",
-  "requirements": ["xmltodict", "websockets"],
-  "dependencies": [],
   "codeowners": ["@lordzeroMS"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/lordzeroMS/novelanladv9",
+  "integration_type": "device",
   "iot_class": "local_polling",
-  "integration_type": "device"
+  "requirements": ["xmltodict", "websockets"],
+  "version": "0.0.1"
 }
