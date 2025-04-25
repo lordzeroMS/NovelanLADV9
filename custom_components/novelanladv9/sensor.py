@@ -1,109 +1,147 @@
-import aiohttp
-import async_timeout
-import requests
-import xmltodict
-import time
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
-from homeassistant.components.number import NumberEntity, NumberDeviceClass
-from .const import DOMAIN, CONF_IP_ADDRESS
+import logging
+from datetime import timedelta
+import voluptuous as vol
+from homeassistant.components.sensor import SensorEntity
+from homeassistant.const import (
+    CONF_IP_ADDRESS,
+    TEMP_CELSIUS,
+    PERCENTAGE,
+    PRESSURE_BAR,
+    VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR,
+    ENERGY_KILO_WATT_HOUR,
+)
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+)
 
-async def async_setup_entry(hass, entry, async_add_entities):
+from .const import DOMAIN
+from .reading_data import determine_sensor_type
+
+_LOGGER = logging.getLogger(__name__)
+
+SCAN_INTERVAL = timedelta(minutes=5)
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+) -> None:
+    """Set up the Novelan LADV9 Heat Pump sensors from config entry."""
     ip_address = entry.data[CONF_IP_ADDRESS]
-    sensors = [
-        LueftungsanlageSensor(hass, ip_address, "aktuell0", "Lüftungsanlage Stufe", entry.entry_id),
-        LueftungsanlageSensor(hass, ip_address, "abl0", "Lüftungsanlage Abluft Temperatur", entry.entry_id),
-        LueftungsanlageSensor(hass, ip_address, "zul0", "Lüftungsanlage Zuluft Temperatur", entry.entry_id),
-        LueftungsanlageSensor(hass, ip_address, "aul0", "Lüftungsanlage Außenluft Temperatur", entry.entry_id),
-        LueftungsanlageSensor(hass, ip_address, "fol0", "Lüftungsanlage Fortluft Temperatur", entry.entry_id),
-        LueftungsanlageSensor(hass, ip_address, "rest_time", "Lüftungsanlage Filter Restzeit", entry.entry_id),
-        LueftungsanlageSensor(hass, ip_address, "bypass", "Lüftungsanlage Bypass Status", entry.entry_id)
-    ]
-    async_add_entities(sensors)
-    await LueftungsanlageSensor.update_all_sensors(sensors)
+
+    coordinator = NovelAnLADV9Coordinator(hass, ip_address)
+    await coordinator.async_config_entry_first_refresh()
+
+    entities = []
+
+    for name, value in coordinator.data.items():
+        sensor_type = determine_sensor_type(name, value)
+        entities.append(NovelAnLADV9Sensor(coordinator, name, sensor_type))
+
+    async_add_entities(entities, True)
 
 
-class LueftungsanlageSensor(SensorEntity):
-    _shared_data = None
-    _last_update = 0
+class NovelAnLADV9Coordinator(DataUpdateCoordinator):
+    """Class to manage fetching data from the Novelan LADV9 Heat Pump."""
 
-    def __init__(self, hass, ip_address, sensor_type, name, entry_id):
-        self._hass = hass
-        self._ip_address = ip_address
-        self._sensor_type = sensor_type
+    def __init__(self, hass, ip_address):
+        """Initialize."""
+        self.ip_address = ip_address
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_interval=SCAN_INTERVAL,
+        )
+
+    async def _async_update_data(self):
+        """Update data via library."""
+        import xmltodict
+        import websockets
+        from datetime import datetime
+
+        ws_url = f"ws://{self.ip_address}:8214/"
+        ws_com_login = "LOGIN;999999"
+
+        try:
+            async with websockets.connect(ws_url, subprotocols=['Lux_WS']) as websocket:
+                res = {}
+                await websocket.send(ws_com_login)
+                greeting = await websocket.recv()
+                d = xmltodict.parse(greeting)
+                nid = [c['@id'] for c in d['Navigation']['item'] if c['name'] == 'Informationen'][0]
+                await websocket.send(f"GET;{nid}")
+                p = await websocket.recv()
+                d = xmltodict.parse(p)
+                for k in d['Content']['item']:
+                    prefix = k['name'][0]
+                    for l in k['item']:
+                        if not isinstance(l, dict):
+                            continue
+                        res[f"{prefix}_{l['name']}"] = l['value']
+                res['Time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                return res
+        except Exception as e:
+            _LOGGER.error(f"Error fetching data: {e}")
+            return {}
+
+
+class NovelAnLADV9Sensor(CoordinatorEntity, SensorEntity):
+    """Representation of a Novelan LADV9 Heat Pump sensor."""
+
+    def __init__(self, coordinator, name, sensor_type):
+        """Initialize the sensor."""
+        super().__init__(coordinator)
         self._name = name
-        self._entry_id = entry_id
-        self._state = None
-        self._attr_device_class = SensorDeviceClass.TEMPERATURE if "Temperatur" in name else None
-        self._attr_unit_of_measurement = "°C" if "Temperatur" in name else None
+        self._sensor_type = sensor_type
+        self._attr_unique_id = f"{DOMAIN}_{name}"
+        self._attr_name = name.replace('_', ' ')
+
+        # Map sensor types to Home Assistant device classes
+        if "Temperature" in sensor_type:
+            if "°C" in sensor_type:
+                self._attr_native_unit_of_measurement = TEMP_CELSIUS
+                self._attr_device_class = "temperature"
+            elif "K" in sensor_type:
+                self._attr_native_unit_of_measurement = "K"
+                self._attr_device_class = "temperature"
+        elif "Pressure" in sensor_type:
+            self._attr_native_unit_of_measurement = PRESSURE_BAR
+            self._attr_device_class = "pressure"
+        elif "Flow Rate" in sensor_type:
+            self._attr_native_unit_of_measurement = VOLUME_FLOW_RATE_CUBIC_METERS_PER_HOUR
+            self._attr_device_class = "volume_flow_rate"
+        elif "Energy" in sensor_type:
+            self._attr_native_unit_of_measurement = ENERGY_KILO_WATT_HOUR
+            self._attr_device_class = "energy"
+        elif "Percentage" in sensor_type:
+            self._attr_native_unit_of_measurement = PERCENTAGE
+            self._attr_device_class = "power_factor"
+        elif "Binary" in sensor_type:
+            self._attr_device_class = "binary_sensor"
 
     @property
-    def name(self):
-        return self._name
+    def native_value(self):
+        """Return the state of the sensor."""
+        value = self.coordinator.data.get(self._name)
 
-    @property
-    def state(self):
-        return self._state
-
-    @property
-    def unique_id(self):
-        return f"{self._entry_id}_{self._sensor_type}"
-
-    @property
-    def unit_of_measurement(self):
-        return self._attr_unit_of_measurement
-
-    @classmethod
-    async def update_all_sensors(cls, sensors):
-        current_time = time.time()
-        if cls._shared_data is None or (current_time - cls._last_update) > 5:
-            async with async_timeout.timeout(10):
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(f"http://{sensors[0]._ip_address}/status.xml") as response:
-                        if response.status == 200:
-                            text = await response.text()
-                            cls._shared_data = xmltodict.parse(text)['response']
-                            cls._last_update = current_time
-        for sensor in sensors:
-            sensor.update_from_shared_data()
-
-    def update_from_shared_data(self):
-        raw_value = self._shared_data.get(self._sensor_type)
-        if self._sensor_type == "aktuell0" and raw_value and "Stufe" in raw_value:
-            self._state = int(raw_value.split("Stufe")[1].split()[0])
-        else:
-            self._state = raw_value
-
-    async def async_update(self):
-        await self.update_all_sensors([self])
-
-class LueftungsanlageRegler(NumberEntity):
-    def __init__(self, hass, ip_address, entry_id, sensor):
-        self._hass = hass
-        self._ip_address = ip_address
-        self._entry_id = entry_id
-        self._sensor = sensor
-        self._attr_native_value = 1  # Default stage
-        self._attr_native_min_value = 1
-        self._attr_native_max_value = 4
-        self._attr_native_step = 1
-        self._attr_device_class = NumberDeviceClass.POWER
-
-    @property
-    def name(self):
-        return "Lüftungsanlage Regler"
-
-    @property
-    def unique_id(self):
-        return f"{self._entry_id}_regler_2"
-
-    async def async_set_native_value(self, value):
-        if 1 <= value <= 4:
-            await self._hass.async_add_executor_job(
-                requests.get, f"http://{self._ip_address}/stufe.cgi?stufe={value}"
-            )
-            self._attr_native_value = value
-            self.async_write_ha_state()
-
-    async def async_update(self):
-        self._attr_native_value = self._sensor.state
-        self.async_write_ha_state()
+        # Clean up the value for displaying in Home Assistant
+        if "°C" in value:
+            return float(value.replace("°C", ""))
+        elif "K" in value:
+            return float(value.replace("K", ""))
+        elif "bar" in value:
+            return float(value.replace("bar", ""))
+        elif "l/h" in value:
+            return int(value.replace("l/h", ""))
+        elif "%" in value:
+            return float(value.replace("%", ""))
+        elif "V" in value:
+            return float(value.replace("V", ""))
+        elif "RPM" in value:
+            return int(value.replace("RPM", ""))
+        elif "kWh" in value:
+            return float(value.replace("kWh", ""))
+        return value

@@ -25,36 +25,36 @@ if len(sys.argv) == 2:
 
 def determine_sensor_type(reading_name, reading_value):
     if "Temperaturen" in reading_name:
-        if "°C" in reading_value:
-            return "Temperature (°C)"
-        elif "K" in reading_value:
-            return "Temperature (K)"
+        if "°C" in str(reading_value):
+            return "temperature"
+        elif "K" in str(reading_value):
+            return "temperature.kelvin"
     elif "Eingänge" in reading_name:
-        if reading_value in ["Ein", "Aus"]:
-            return "Binary Input"
-        elif "bar" in reading_value:
-            return "Pressure (bar)"
-        elif "l/h" in reading_value:
-            return "Flow Rate (l/h)"
+        if str(reading_value) in ["Ein", "Aus"]:
+            return "binary_sensor"
+        elif "bar" in str(reading_value):
+            return "pressure"
+        elif "l/h" in str(reading_value):
+            return "flow_rate"
     elif "Ausgänge" in reading_name:
-        if reading_value in ["Ein", "Aus"]:
-            return "Binary Output"
-        elif "V" in reading_value:
-            return "Voltage (V)"
-        elif "%" in reading_value:
-            return "Percentage (%)"
-        elif "RPM" in reading_value:
-            return "Speed (RPM)"
+        if str(reading_value) in ["Ein", "Aus"]:
+            return "binary_sensor"
+        elif "V" in str(reading_value):
+            return "voltage"
+        elif "%" in str(reading_value):
+            return "percentage"
+        elif "RPM" in str(reading_value):
+            return "speed"
     elif "Ablaufzeiten" in reading_name:
-        return "Time Duration"
+        return "duration"
     elif "Betriebsstunden" in reading_name:
-        return "Operating Hours"
+        return "operating_hours"
     elif "Fehlerspeicher" in reading_name or "Abschaltungen" in reading_name:
-        return "Error Log"
+        return "error_log"
     elif "Anlagenstatus" in reading_name:
-        return "System Status"
+        return "system_status"
     elif "Wärmemenge" in reading_name:
-        return "Energy (kWh)"
+        return "energy"
     else:
         return "Unknown"
 

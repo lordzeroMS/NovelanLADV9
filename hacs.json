@@ -1,7 +1,6 @@
 {
   "name": "NovelanLADV9",
   "content_in_root": false,
-  "domains": ["novelanladv9"],
   "country": "DE",
   "homeassistant": "2024.8.2",
   "render_readme": true
