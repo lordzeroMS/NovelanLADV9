@@ -46,8 +46,8 @@ async def fetch_data(ip_address, pin="999999"):
         await websocket.send(ws_com_login)
         greeting = await websocket.recv()
         d = xmltodict.parse(greeting)
-        nid = [c['@id'] for c in d['Navigation']['item'] if c['name'] == 'Informationen'][0]
-        await websocket.send(f"GET;{nid}")
+        information_id = [c['@id'] for c in d['Navigation']['item'] if c['name'] == 'Informationen'][0]
+        await websocket.send(f"GET;{information_id}")
         p = await websocket.recv()
         d = xmltodict.parse(p)
         for k in d['Content']['item']:
@@ -57,7 +57,33 @@ async def fetch_data(ip_address, pin="999999"):
                     continue
                 res[f"{prefix}_{l['name']}"] = l['value']
         res['Time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return res
+        return res, d['Content']['item']
 
-# Remove the code that runs at module level
-# asyncio.get_event_loop().run_until_complete(hello())
+
+async def fetch_controls(ip_address, pin="999999"):
+    ws_url = f"ws://{ip_address}:8214/"
+    ws_com_login = f"LOGIN;{pin}"
+
+    async with websockets.connect(ws_url, subprotocols=['Lux_WS']) as websocket:
+        res = {}
+        await websocket.send(ws_com_login)
+        greeting = await websocket.recv()
+        d = xmltodict.parse(greeting)
+        settings = [c for c in d['Navigation']['item'] if c['name'] == 'Einstellungen'][0]
+        operate_id = [c for c in settings['item'] if c['name'] == 'Betriebsart'][0]['@id']
+        await websocket.send(f"GET;{operate_id}")
+        p = await websocket.recv()
+        d = xmltodict.parse(p)
+        res2 = {}
+        return d['Content']['item']
+
+async def set_control(ip_address, pin, control_id, value):
+    ws_url = f"ws://{ip_address}:8214/"
+    ws_com_login = f"LOGIN;{pin}"
+    async with websockets.connect(ws_url, subprotocols=['Lux_WS']) as websocket:
+        await websocket.send(ws_com_login)
+        await websocket.recv()  # greeting
+        await websocket.send(f"SET;{control_id};{value}")
+        response = await websocket.recv()
+        # Optionally parse response for success
+        return response

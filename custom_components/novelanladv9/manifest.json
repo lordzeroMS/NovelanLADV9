@@ -1,12 +1,12 @@
 {
-  "domain": "novelanladv9",
-  "name": "Novelan LADV9 Heat Pump",
-  "codeowners": ["@lordzeroMS"],
-  "config_flow": true,
-  "dependencies": [],
-  "documentation": "https://github.com/lordzeroMS/novelanladv9",
-  "integration_type": "device",
-  "iot_class": "local_polling",
-  "requirements": ["xmltodict", "websockets"],
-  "version": "0.0.1"
+    "domain": "novelanladv9",
+    "name": "Novelan LADV9 Heat Pump",
+    "codeowners": ["@lordzeroms"],
+    "config_flow": true,
+    "dependencies": ["select"],
+    "documentation": "https://github.com/lordzeroms/novelanladv9",
+    "issue_tracker": "https://github.com/lordzeroms/novelanladv9/issues",
+    "iot_class": "local_polling",
+    "requirements": ["xmltodict", "websockets"],
+    "version": "0.1.0"
 }
