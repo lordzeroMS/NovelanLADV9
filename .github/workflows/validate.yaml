@@ -35,7 +35,7 @@ jobs:
       - name: Import smoke test
         run: |
           python - <<'PY'
-          import importlib
+          import importlib, traceback, sys
           import homeassistant
           mods = [
               'custom_components.novelanladv9',
@@ -44,7 +44,16 @@ jobs:
               'custom_components.novelanladv9.number',
               'custom_components.novelanladv9.reading_data',
           ]
+          ok = True
           for m in mods:
-              importlib.import_module(m)
+              try:
+                  importlib.import_module(m)
+                  print('Imported', m)
+              except Exception:
+                  ok = False
+                  print('Failed to import', m)
+                  traceback.print_exc()
+          if not ok:
+              sys.exit(1)
           print('Imports OK with Home Assistant', homeassistant.__version__)
           PY
