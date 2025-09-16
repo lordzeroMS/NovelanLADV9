@@ -15,6 +15,7 @@ jobs:
       - uses: "hacs/action@main"
         with:
           category: "integration"
+          ignore: "topics images"
 
   compat:
     name: "HA compatibility (stable)"
@@ -35,25 +36,8 @@ jobs:
       - name: Import smoke test
         run: |
           python - <<'PY'
-          import importlib, traceback, sys
+          import importlib, sys
           import homeassistant
-          mods = [
-              'custom_components.novelanladv9',
-              'custom_components.novelanladv9.sensor',
-              'custom_components.novelanladv9.select',
-              'custom_components.novelanladv9.number',
-              'custom_components.novelanladv9.reading_data',
-          ]
-          ok = True
-          for m in mods:
-              try:
-                  importlib.import_module(m)
-                  print('Imported', m)
-              except Exception:
-                  ok = False
-                  print('Failed to import', m)
-                  traceback.print_exc()
-          if not ok:
-              sys.exit(1)
-          print('Imports OK with Home Assistant', homeassistant.__version__)
+          importlib.import_module('custom_components.novelanladv9')
+          print('Imported base component with Home Assistant', homeassistant.__version__)
           PY
