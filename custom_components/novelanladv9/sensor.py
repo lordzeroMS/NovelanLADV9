@@ -6,6 +6,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
+    UpdateFailed,
 )
 from homeassistant.components.sensor import (
     SensorEntity, SensorDeviceClass, SensorStateClass
@@ -15,10 +16,8 @@ from homeassistant.const import (
     PERCENTAGE,
     UnitOfTemperature,
     UnitOfPressure,
-    UnitOfVolumeFlowRate,
     UnitOfEnergy,
     UnitOfElectricPotential,
-    UnitOfSpeed,
     UnitOfTime,
 )
 
@@ -79,10 +78,12 @@ class NovelAnLADV9Coordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Update data via library."""
         try:
-            return await fetch_data(self.ip_address, self.pin)
+            data = await fetch_data(self.ip_address, self.pin)
+            if not isinstance(data, dict):
+                raise UpdateFailed("Unexpected data format from fetch_data")
+            return data
         except Exception as e:
-            _LOGGER.error(f"Error fetching data: {e}")
-            return {}
+            raise UpdateFailed(f"Error fetching data from {self.ip_address}: {e}")
 
 
 class NovelAnLADV9Sensor(CoordinatorEntity, SensorEntity):
@@ -118,22 +119,24 @@ class NovelAnLADV9Sensor(CoordinatorEntity, SensorEntity):
             self._attr_native_unit_of_measurement = UnitOfPressure.BAR
             self._attr_device_class = SensorDeviceClass.PRESSURE
         elif "flow_rate" in sensor_type_lower:
-            self._attr_native_unit_of_measurement = UnitOfVolumeFlowRate.CUBIC_METERS_PER_HOUR
-            self._attr_device_class = SensorDeviceClass.VOLUME_FLOW_RATE
+            # Report native unit as liters per hour.
+            self._attr_native_unit_of_measurement = "L/h"
+            self._attr_device_class = None
         elif "energy" in sensor_type_lower:
             self._attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
             self._attr_device_class = SensorDeviceClass.ENERGY
         elif "percentage" in sensor_type_lower:
             self._attr_native_unit_of_measurement = PERCENTAGE
-            self._attr_device_class = SensorDeviceClass.POWER_FACTOR
+            self._attr_device_class = None
         elif "binary_sensor" in sensor_type_lower:
-            self._attr_device_class = SensorDeviceClass.ENUM
+            self._attr_device_class = None
         elif "voltage" in sensor_type_lower:
             self._attr_native_unit_of_measurement = UnitOfElectricPotential.VOLT
             self._attr_device_class = SensorDeviceClass.VOLTAGE
         elif "speed" in sensor_type_lower:
-            self._attr_native_unit_of_measurement = UnitOfSpeed.KILOMETERS_PER_HOUR
-            self._attr_device_class = SensorDeviceClass.SPEED
+            # The device reports RPM values
+            self._attr_native_unit_of_measurement = "RPM"
+            self._attr_device_class = None
         elif "duration" in sensor_type_lower:
             self._attr_native_unit_of_measurement = UnitOfTime.HOURS
             self._attr_device_class = SensorDeviceClass.DURATION
@@ -141,8 +144,8 @@ class NovelAnLADV9Sensor(CoordinatorEntity, SensorEntity):
             self._attr_native_unit_of_measurement = UnitOfTime.HOURS
             self._attr_device_class = SensorDeviceClass.DURATION
         elif "error_log" in sensor_type_lower or "system_status" in sensor_type_lower:
-            # These are text-based sensors
-            self._attr_device_class = SensorDeviceClass.ENUM
+            # Text-based sensors
+            self._attr_device_class = None
         else:
             self._attr_device_class = None
             self._attr_native_unit_of_measurement = None

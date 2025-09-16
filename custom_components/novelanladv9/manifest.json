@@ -3,7 +3,6 @@
     "name": "Novelan LADV9 Heat Pump",
     "codeowners": ["@lordzeroms"],
     "config_flow": true,
-    "dependencies": ["select"],
     "documentation": "https://github.com/lordzeroms/novelanladv9",
     "issue_tracker": "https://github.com/lordzeroms/novelanladv9/issues",
     "iot_class": "local_polling",

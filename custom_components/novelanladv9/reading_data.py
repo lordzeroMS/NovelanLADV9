@@ -38,33 +38,54 @@ def determine_sensor_type(reading_name, reading_value):
         return "Unknown"
 
 async def fetch_data(ip_address, pin="999999"):
+    """Fetch current readings and return a flat dict of name -> value.
+
+    Keys are built as "<group>_<name>", e.g. "Temperaturen_Vorlauf".
+    """
     ws_url = f"ws://{ip_address}:8214/"
     ws_com_login = f"LOGIN;{pin}"
 
-    async with websockets.connect(ws_url, subprotocols=['Lux_WS']) as websocket:
-        res = {}
+    async with websockets.connect(ws_url, subprotocols=['Lux_WS'], open_timeout=5, ping_timeout=10, close_timeout=2) as websocket:
+        res: dict[str, str] = {}
         await websocket.send(ws_com_login)
         greeting = await websocket.recv()
         d = xmltodict.parse(greeting)
-        information_id = [c['@id'] for c in d['Navigation']['item'] if c['name'] == 'Informationen'][0]
-        await websocket.send(f"GET;{information_id}")
+        nav_items = d['Navigation']['item']
+        if isinstance(nav_items, dict):
+            nav_items = [nav_items]
+        information = next((c for c in nav_items if c.get('name') in ('Informationen', 'Information')), None)
+        if not information:
+            return {}
+        await websocket.send(f"GET;{information['@id']}")
         p = await websocket.recv()
         d = xmltodict.parse(p)
-        for k in d['Content']['item']:
-            prefix = k['name'][0]
-            for l in k['item']:
-                if not isinstance(l, dict):
+        content_items = d.get('Content', {}).get('item', [])
+        if isinstance(content_items, dict):
+            content_items = [content_items]
+        for group in content_items:
+            gname = group.get('name')
+            items = group.get('item')
+            if isinstance(items, dict):
+                items = [items]
+            if not isinstance(items, list):
+                continue
+            for it in items:
+                if not isinstance(it, dict):
                     continue
-                res[f"{prefix}_{l['name']}"] = l['value']
+                name = it.get('name')
+                value = it.get('value')
+                if gname and name is not None:
+                    key = f"{gname}_{name}"
+                    res[key] = value
         res['Time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        return res, d['Content']['item']
+        return res
 
 
 async def fetch_controls(ip_address, pin="999999"):
     ws_url = f"ws://{ip_address}:8214/"
     ws_com_login = f"LOGIN;{pin}"
 
-    async with websockets.connect(ws_url, subprotocols=['Lux_WS']) as websocket:
+    async with websockets.connect(ws_url, subprotocols=['Lux_WS'], open_timeout=5, ping_timeout=10, close_timeout=2) as websocket:
         res = {}
         await websocket.send(ws_com_login)
         greeting = await websocket.recv()
@@ -114,7 +135,7 @@ async def fetch_setpoints(ip_address, pin="999999"):
         walk(root)
         return found
 
-    async with websockets.connect(ws_url, subprotocols=['Lux_WS']) as websocket:
+    async with websockets.connect(ws_url, subprotocols=['Lux_WS'], open_timeout=5, ping_timeout=10, close_timeout=2) as websocket:
         await websocket.send(ws_com_login)
         greeting = await websocket.recv()
         d = xmltodict.parse(greeting)
@@ -143,7 +164,7 @@ async def fetch_setpoints(ip_address, pin="999999"):
 async def set_control(ip_address, pin, control_id, value):
     ws_url = f"ws://{ip_address}:8214/"
     ws_com_login = f"LOGIN;{pin}"
-    async with websockets.connect(ws_url, subprotocols=['Lux_WS']) as websocket:
+    async with websockets.connect(ws_url, subprotocols=['Lux_WS'], open_timeout=5, ping_timeout=10, close_timeout=2) as websocket:
         await websocket.send(ws_com_login)
         await websocket.recv()  # greeting
         await websocket.send(f"SET;{control_id};{value}")

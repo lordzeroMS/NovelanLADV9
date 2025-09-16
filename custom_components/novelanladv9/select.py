@@ -18,14 +18,34 @@ class NovelanLADV9SelectEntity(SelectEntity):
         self._ip = ip
         self._pin = pin
         self._control = control
-        self._attr_name = control["name"]
+        # Normalize name
+        name = control.get("name")
+        if isinstance(name, list):
+            name = name[0]
+        self._attr_name = name
+        # Options
         options = control.get("option")
         if isinstance(options, dict):
             options = [options]
         self._attr_options = [opt.get("#text") for opt in options]
-        self._attr_unique_id = control["@id"]
+        # Keep control id for SET operations; it's ephemeral per session
+        self._control_id = control.get("@id")
+        # Stable unique_id based on ip + logical name
+        ip_id = ip.replace('.', '_')
+        slug = (
+            str(name).lower()
+            .replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
+            .replace("ß", "ss").replace(".", "").replace(" ", "_")
+        )
+        self._attr_unique_id = f"{DOMAIN}_{ip_id}_{slug}"
         self._attr_entity_category = EntityCategory.CONFIG
         self._value = control["value"]
+        self._attr_device_info = {
+            "identifiers": {(DOMAIN, ip)},
+            "name": f"Novelan LADV9 ({ip})",
+            "manufacturer": "Novelan",
+            "model": "LADV9",
+        }
 
     @property
     def current_option(self):
@@ -34,18 +54,21 @@ class NovelanLADV9SelectEntity(SelectEntity):
     async def async_select_option(self, option: str):
         # Find the value corresponding to the selected option text
         value = None
-        for opt in self._control["option"]:
+        opts = self._control.get("option")
+        if isinstance(opts, dict):
+            opts = [opts]
+        for opt in opts:
             if opt["#text"] == option:
                 value = opt["@value"]
                 break
         if value is not None:
-            await set_control(self._ip, self._pin, self._attr_unique_id, value)
+            await set_control(self._ip, self._pin, self._control_id, value)
             self._value = option
             self.async_write_ha_state()
 
     async def async_update(self):
         controls = await fetch_controls(self._ip, self._pin)
         for control in controls:
-            if control["@id"] == self._attr_unique_id:
+            if control.get("@id") == self._control_id:
                 self._value = control["value"]
                 break
