@@ -74,8 +74,71 @@ async def fetch_controls(ip_address, pin="999999"):
         await websocket.send(f"GET;{operate_id}")
         p = await websocket.recv()
         d = xmltodict.parse(p)
-        res2 = {}
         return d['Content']['item']
+
+
+async def fetch_setpoints(ip_address, pin="999999"):
+    """Discover numeric setpoint controls for hot water and heating limits.
+
+    Returns a dict keyed by human-readable name with values containing
+    control metadata: { 'id': str, 'name': str, 'value': str }
+    """
+    ws_url = f"ws://{ip_address}:8214/"
+    ws_com_login = f"LOGIN;{pin}"
+
+    targets = {
+        "Warmwasser-Soll",
+        "Rückl.-Begr.",
+        "Min. Rückl.Solltemp.",
+        "Max.Warmwassertemp.",
+    }
+
+    def collect_controls(root):
+        found = {}
+        def walk(x):
+            if isinstance(x, dict):
+                name = x.get('name')
+                if isinstance(name, list):
+                    name = name[0] if name else None
+                if name in targets and ('@id' in x) and ('value' in x or 'option' in x):
+                    found[name] = {
+                        'id': x.get('@id'),
+                        'name': name,
+                        'value': x.get('value'),
+                    }
+                for v in x.values():
+                    walk(v)
+            elif isinstance(x, list):
+                for v in x:
+                    walk(v)
+        walk(root)
+        return found
+
+    async with websockets.connect(ws_url, subprotocols=['Lux_WS']) as websocket:
+        await websocket.send(ws_com_login)
+        greeting = await websocket.recv()
+        d = xmltodict.parse(greeting)
+        nav_items = d['Navigation']['item']
+        if isinstance(nav_items, dict):
+            nav_items = [nav_items]
+
+        results = {}
+
+        # Probe Einstellungen (Temperaturen and System Einstellung)
+        settings = next((c for c in nav_items if c.get('name') in ('Einstellungen', 'Settings')), None)
+        if settings:
+            await websocket.send(f"GET;{settings['@id']}")
+            content = xmltodict.parse(await websocket.recv())
+            results.update(collect_controls(content))
+
+        # Also look at Informationen (some controllers expose *-Soll here)
+        information = next((c for c in nav_items if c.get('name') in ('Informationen', 'Information')), None)
+        if information:
+            await websocket.send(f"GET;{information['@id']}")
+            content = xmltodict.parse(await websocket.recv())
+            results.update(collect_controls(content))
+
+        return results
 
 async def set_control(ip_address, pin, control_id, value):
     ws_url = f"ws://{ip_address}:8214/"

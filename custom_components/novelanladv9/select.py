@@ -1,12 +1,12 @@
 from homeassistant.components.select import SelectEntity
 from homeassistant.helpers.entity import EntityCategory
 from .reading_data import fetch_controls, set_control
+from .const import CONF_IP_ADDRESS, CONF_PIN, DOMAIN
 
-DOMAIN = "novelanladv9"
 
 async def async_setup_entry(hass, config_entry, async_add_entities):
-    ip = config_entry.data.get("ip")
-    pin = config_entry.data.get("pin", "999999")
+    ip = config_entry.data.get(CONF_IP_ADDRESS)
+    pin = config_entry.data.get(CONF_PIN, "999999")
     controls = await fetch_controls(ip, pin)
     entities = []
     for control in controls:
@@ -19,7 +19,10 @@ class NovelanLADV9SelectEntity(SelectEntity):
         self._pin = pin
         self._control = control
         self._attr_name = control["name"]
-        self._attr_options = [opt["#text"] for opt in control["option"]]
+        options = control.get("option")
+        if isinstance(options, dict):
+            options = [options]
+        self._attr_options = [opt.get("#text") for opt in options]
         self._attr_unique_id = control["@id"]
         self._attr_entity_category = EntityCategory.CONFIG
         self._value = control["value"]
