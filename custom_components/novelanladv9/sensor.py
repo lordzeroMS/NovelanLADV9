@@ -12,7 +12,6 @@ from homeassistant.components.sensor import (
     SensorEntity, SensorDeviceClass, SensorStateClass
 )
 from homeassistant.const import (
-    CONF_IP_ADDRESS,
     PERCENTAGE,
     UnitOfTemperature,
     UnitOfPressure,
