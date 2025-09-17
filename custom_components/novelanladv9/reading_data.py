@@ -1,6 +1,12 @@
+import asyncio
+import logging
+from datetime import datetime
+
 import xmltodict
 import websockets
-from datetime import datetime
+
+
+LOGGER = logging.getLogger(__name__)
 
 def determine_sensor_type(reading_name, reading_value):
     if "Temperaturen" in reading_name:
@@ -164,10 +170,63 @@ async def fetch_setpoints(ip_address, pin="999999"):
 async def set_control(ip_address, pin, control_id, value):
     ws_url = f"ws://{ip_address}:8214/"
     ws_com_login = f"LOGIN;{pin}"
-    async with websockets.connect(ws_url, subprotocols=['Lux_WS'], open_timeout=5, ping_timeout=10, close_timeout=2) as websocket:
-        await websocket.send(ws_com_login)
-        await websocket.recv()  # greeting
-        await websocket.send(f"SET;{control_id};{value}")
-        response = await websocket.recv()
-        # Optionally parse response for success
-        return response
+
+    set_sent = False
+
+    try:
+        async with websockets.connect(
+            ws_url,
+            subprotocols=['Lux_WS'],
+            open_timeout=5,
+            ping_timeout=10,
+            close_timeout=2,
+        ) as websocket:
+            await websocket.send(ws_com_login)
+            await websocket.recv()  # greeting
+            await websocket.send(f"SET;{control_id};{value}")
+            set_sent = True
+
+            try:
+                response = await websocket.recv()
+            except websockets.ConnectionClosed as err:
+                LOGGER.debug(
+                    "Control %s closed without response on %s: %s",
+                    control_id,
+                    ip_address,
+                    err,
+                )
+                response = None
+            except asyncio.TimeoutError as err:
+                LOGGER.debug(
+                    "Timed out waiting for response after SET for %s (%s): %s",
+                    control_id,
+                    ip_address,
+                    err,
+                )
+                response = None
+
+            return response
+    except websockets.ConnectionClosed as err:
+        if set_sent:
+            LOGGER.debug(
+                "Websocket closed unexpectedly after SET for %s on %s: %s",
+                control_id,
+                ip_address,
+                err,
+            )
+            return None
+        LOGGER.error(
+            "Connection closed before SET for %s on %s: %s",
+            control_id,
+            ip_address,
+            err,
+        )
+        raise
+    except (asyncio.TimeoutError, websockets.WebSocketException, OSError) as err:
+        LOGGER.error(
+            "Failed to send control command %s on %s: %s",
+            control_id,
+            ip_address,
+            err,
+        )
+        raise
