@@ -203,7 +203,7 @@ async def set_control(ip_address, pin, control_id, value):
             try:
                 response = await asyncio.wait_for(websocket.recv(), timeout=5)
             except ConnectionClosedError as err:
-                LOGGER.debug(
+                LOGGER.warning(
                     "Control %s closed with error without response on %s: %s",
                     control_id,
                     ip_address,
@@ -211,7 +211,7 @@ async def set_control(ip_address, pin, control_id, value):
                 )
                 response = None
             except ConnectionClosed as err:
-                LOGGER.debug(
+                LOGGER.warning(
                     "Control %s closed without response on %s: %s",
                     control_id,
                     ip_address,
@@ -240,7 +240,7 @@ async def set_control(ip_address, pin, control_id, value):
             return response
     except ConnectionClosedError as err:
         if set_sent:
-            LOGGER.debug(
+            LOGGER.warning(
                 "Websocket closed with error after SET for %s on %s: %s",
                 control_id,
                 ip_address,
@@ -256,7 +256,7 @@ async def set_control(ip_address, pin, control_id, value):
         raise
     except ConnectionClosed as err:
         if set_sent:
-            LOGGER.debug(
+            LOGGER.warning(
                 "Websocket closed unexpectedly after SET for %s on %s: %s",
                 control_id,
                 ip_address,
