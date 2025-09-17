@@ -15,7 +15,7 @@ jobs:
       - uses: "hacs/action@main"
         with:
           category: "integration"
-          ignore: "topics images"
+          ignore: "topics images brands"
 
   compat:
     name: "HA compatibility (stable)"
