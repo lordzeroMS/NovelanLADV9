@@ -230,7 +230,7 @@ async def set_control(ip_address, pin, control_id, value):
             with suppress(ConnectionClosed, ConnectionClosedError, ConnectionClosedOK):
                 await websocket.wait_closed()
 
-            LOGGER.debug(
+            LOGGER.info(
                 "SET response for %s on %s: %s",
                 control_id,
                 ip_address,
