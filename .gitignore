@@ -1,2 +1,4 @@
 .idea/
 .venv_ha/
+__pycache__/
+*.pyc
