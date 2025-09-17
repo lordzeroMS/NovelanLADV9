@@ -1,9 +1,23 @@
 import asyncio
 import logging
+from contextlib import suppress
 from datetime import datetime
 
 import xmltodict
 import websockets
+
+try:  # websockets >= 12
+    from websockets.exceptions import (
+        ConnectionClosed,
+        ConnectionClosedError,
+        ConnectionClosedOK,
+        WebSocketException,
+    )
+except ImportError:  # pragma: no cover - legacy fallback
+    ConnectionClosed = websockets.ConnectionClosed
+    ConnectionClosedError = getattr(websockets, "ConnectionClosedError", ConnectionClosed)
+    ConnectionClosedOK = getattr(websockets, "ConnectionClosedOK", ConnectionClosed)
+    WebSocketException = websockets.WebSocketException
 
 
 LOGGER = logging.getLogger(__name__)
@@ -187,8 +201,16 @@ async def set_control(ip_address, pin, control_id, value):
             set_sent = True
 
             try:
-                response = await websocket.recv()
-            except websockets.ConnectionClosed as err:
+                response = await asyncio.wait_for(websocket.recv(), timeout=5)
+            except ConnectionClosedError as err:
+                LOGGER.debug(
+                    "Control %s closed with error without response on %s: %s",
+                    control_id,
+                    ip_address,
+                    err,
+                )
+                response = None
+            except ConnectionClosed as err:
                 LOGGER.debug(
                     "Control %s closed without response on %s: %s",
                     control_id,
@@ -205,8 +227,27 @@ async def set_control(ip_address, pin, control_id, value):
                 )
                 response = None
 
+            with suppress(ConnectionClosed, ConnectionClosedError, ConnectionClosedOK):
+                await websocket.wait_closed()
+
             return response
-    except websockets.ConnectionClosed as err:
+    except ConnectionClosedError as err:
+        if set_sent:
+            LOGGER.debug(
+                "Websocket closed with error after SET for %s on %s: %s",
+                control_id,
+                ip_address,
+                err,
+            )
+            return None
+        LOGGER.error(
+            "Connection error before SET for %s on %s: %s",
+            control_id,
+            ip_address,
+            err,
+        )
+        raise
+    except ConnectionClosed as err:
         if set_sent:
             LOGGER.debug(
                 "Websocket closed unexpectedly after SET for %s on %s: %s",
@@ -222,7 +263,7 @@ async def set_control(ip_address, pin, control_id, value):
             err,
         )
         raise
-    except (asyncio.TimeoutError, websockets.WebSocketException, OSError) as err:
+    except (asyncio.TimeoutError, WebSocketException, OSError) as err:
         LOGGER.error(
             "Failed to send control command %s on %s: %s",
             control_id,

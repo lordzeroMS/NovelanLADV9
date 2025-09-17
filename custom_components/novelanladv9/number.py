@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.number import NumberEntity, NumberDeviceClass
 from homeassistant.const import UnitOfTemperature
 from .const import DOMAIN, CONF_IP_ADDRESS, CONF_PIN
 from .reading_data import fetch_setpoints, set_control
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass, entry, async_add_entities):
@@ -118,6 +123,16 @@ class LuxWsNumber(NumberEntity):
         payload = f"{rounded:.1f}"
         await set_control(self._ip, self._pin, self._control_id, payload)
         self._value = rounded
+        self.async_write_ha_state()
+        try:
+            await self.async_update()
+        except Exception as err:  # pragma: no cover - refresh best effort
+            LOGGER.debug(
+                "Failed to refresh %s after setting value: %s",
+                self.entity_id,
+                err,
+            )
+            return
         self.async_write_ha_state()
 
     async def async_update(self) -> None:
