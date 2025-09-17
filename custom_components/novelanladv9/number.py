@@ -120,7 +120,7 @@ class LuxWsNumber(NumberEntity):
         # round to step and format with one decimal
         step = self._attr_native_step or 0.5
         rounded = round(value / step) * step
-        payload = f"{rounded:.1f}"
+        payload = f"{rounded:.1f}".rstrip("0").rstrip(".")
         await set_control(self._ip, self._pin, self._control_id, payload)
         self._value = rounded
         self.async_write_ha_state()
