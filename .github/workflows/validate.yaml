@@ -36,8 +36,10 @@ jobs:
       - name: Import smoke test
         run: |
           python - <<'PY'
-          import importlib, sys
+          import importlib
           import homeassistant
+          from homeassistant.const import __version__ as HA_VERSION
+
           importlib.import_module('custom_components.novelanladv9')
-          print('Imported base component with Home Assistant', homeassistant.__version__)
+          print('Imported base component with Home Assistant', HA_VERSION)
           PY
