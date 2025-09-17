@@ -1,6 +1,8 @@
 from homeassistant.components.select import SelectEntity
 from homeassistant.helpers.entity import EntityCategory
-from .reading_data import fetch_controls, set_control
+from homeassistant.exceptions import HomeAssistantError
+
+from .reading_data import ControlCommandError, fetch_controls, set_control
 from .const import CONF_IP_ADDRESS, CONF_PIN, DOMAIN
 
 
@@ -62,7 +64,12 @@ class NovelanLADV9SelectEntity(SelectEntity):
                 value = opt["@value"]
                 break
         if value is not None:
-            await set_control(self._ip, self._pin, self._control_id, value)
+            try:
+                await set_control(self._ip, self._pin, self._control_id, value)
+            except ControlCommandError as err:
+                raise HomeAssistantError(
+                    f"Failed to set {self._attr_name} to {option}: {err}"
+                ) from err
             self._value = option
             self.async_write_ha_state()
 

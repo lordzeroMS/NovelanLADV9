@@ -22,6 +22,11 @@ except ImportError:  # pragma: no cover - legacy fallback
 
 LOGGER = logging.getLogger(__name__)
 
+
+class ControlCommandError(Exception):
+    """Raised when the heat pump rejects a control command."""
+
+
 def determine_sensor_type(reading_name, reading_value):
     if "Temperaturen" in reading_name:
         if "°C" in str(reading_value):
@@ -197,6 +202,12 @@ async def set_control(ip_address, pin, control_id, value):
         ) as websocket:
             await websocket.send(ws_com_login)
             await websocket.recv()  # greeting
+            LOGGER.info(
+                "Sending SET for %s on %s with payload '%s'",
+                control_id,
+                ip_address,
+                value,
+            )
             await websocket.send(f"SET;{control_id};{value}")
             set_sent = True
 
@@ -209,7 +220,7 @@ async def set_control(ip_address, pin, control_id, value):
                     ip_address,
                     err,
                 )
-                response = None
+                raise ControlCommandError(err) from err
             except ConnectionClosed as err:
                 LOGGER.warning(
                     "Control %s closed without response on %s: %s",
@@ -217,7 +228,7 @@ async def set_control(ip_address, pin, control_id, value):
                     ip_address,
                     err,
                 )
-                response = None
+                raise ControlCommandError(err) from err
             except asyncio.TimeoutError as err:
                 LOGGER.debug(
                     "Timed out waiting for response after SET for %s (%s): %s",
@@ -225,7 +236,7 @@ async def set_control(ip_address, pin, control_id, value):
                     ip_address,
                     err,
                 )
-                response = None
+                raise ControlCommandError(err) from err
 
             with suppress(ConnectionClosed, ConnectionClosedError, ConnectionClosedOK):
                 await websocket.wait_closed()
@@ -246,14 +257,14 @@ async def set_control(ip_address, pin, control_id, value):
                 ip_address,
                 err,
             )
-            return None
+            raise ControlCommandError(err) from err
         LOGGER.error(
             "Connection error before SET for %s on %s: %s",
             control_id,
             ip_address,
             err,
         )
-        raise
+        raise ControlCommandError(err) from err
     except ConnectionClosed as err:
         if set_sent:
             LOGGER.warning(
@@ -262,14 +273,14 @@ async def set_control(ip_address, pin, control_id, value):
                 ip_address,
                 err,
             )
-            return None
+            raise ControlCommandError(err) from err
         LOGGER.error(
             "Connection closed before SET for %s on %s: %s",
             control_id,
             ip_address,
             err,
         )
-        raise
+        raise ControlCommandError(err) from err
     except (asyncio.TimeoutError, WebSocketException, OSError) as err:
         LOGGER.error(
             "Failed to send control command %s on %s: %s",
@@ -277,4 +288,4 @@ async def set_control(ip_address, pin, control_id, value):
             ip_address,
             err,
         )
-        raise
+        raise ControlCommandError(err) from err

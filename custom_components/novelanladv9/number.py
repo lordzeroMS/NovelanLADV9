@@ -4,8 +4,9 @@ import logging
 
 from homeassistant.components.number import NumberEntity, NumberDeviceClass
 from homeassistant.const import UnitOfTemperature
+from homeassistant.exceptions import HomeAssistantError
 from .const import DOMAIN, CONF_IP_ADDRESS, CONF_PIN
-from .reading_data import fetch_setpoints, set_control
+from .reading_data import ControlCommandError, fetch_setpoints, set_control
 
 
 LOGGER = logging.getLogger(__name__)
@@ -120,20 +121,44 @@ class LuxWsNumber(NumberEntity):
         # round to step and format with one decimal
         step = self._attr_native_step or 0.5
         rounded = round(value / step) * step
-        payload = f"{rounded:.1f}".rstrip("0").rstrip(".")
-        await set_control(self._ip, self._pin, self._control_id, payload)
-        self._value = rounded
-        self.async_write_ha_state()
-        try:
-            await self.async_update()
-        except Exception as err:  # pragma: no cover - refresh best effort
-            LOGGER.debug(
-                "Failed to refresh %s after setting value: %s",
-                self.entity_id,
-                err,
-            )
-            return
-        self.async_write_ha_state()
+        primary = f"{rounded:.1f}"
+        candidates = [primary]
+        if "." in primary:
+            candidates.append(primary.replace(".", ","))
+        if primary.endswith(".0"):
+            candidates.append(primary[:-2])
+
+        last_error: Exception | None = None
+        for candidate in dict.fromkeys(candidates):
+            try:
+                await set_control(self._ip, self._pin, self._control_id, candidate)
+            except ControlCommandError as err:
+                LOGGER.debug(
+                    "Setting %s via payload '%s' failed: %s",
+                    self.entity_id,
+                    candidate,
+                    err,
+                )
+                last_error = err
+                continue
+            else:
+                self._value = rounded
+                self.async_write_ha_state()
+                try:
+                    await self.async_update()
+                except Exception as err:  # pragma: no cover - refresh best effort
+                    LOGGER.debug(
+                        "Failed to refresh %s after setting value: %s",
+                        self.entity_id,
+                        err,
+                    )
+                    return
+                self.async_write_ha_state()
+                return
+
+        raise HomeAssistantError(
+            f"Failed to set {self._attr_name} to {rounded}: {last_error}"
+        )
 
     async def async_update(self) -> None:
         # Re-fetch current setpoints and update our value
