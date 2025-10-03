@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import timedelta
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -24,6 +25,38 @@ from .const import DOMAIN, CONF_IP_ADDRESS, CONF_PIN
 from .reading_data import determine_sensor_type, fetch_data
 
 _LOGGER = logging.getLogger(__name__)
+
+
+_SLUG_RE = re.compile(r"[^a-z0-9_]+")
+
+
+def _slugify(value: str) -> str:
+    if not value:
+        return "sensor"
+    normalized = value.lower()
+    replacements = {
+        "ä": "ae",
+        "ö": "oe",
+        "ü": "ue",
+        "ß": "ss",
+    }
+    for source, target in replacements.items():
+        normalized = normalized.replace(source, target)
+    normalized = normalized.replace(" ", "_")
+    normalized = _SLUG_RE.sub("_", normalized)
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized or "sensor"
+
+
+def _format_display_name(raw: str) -> str:
+    if not raw:
+        return raw
+    group, sep, item = raw.partition("_")
+    group_label = group.replace("_", " ").strip()
+    item_label = item.replace("_", " ").strip() if sep else ""
+    if item_label:
+        return f"{group_label} – {item_label}"
+    return group_label
 
 SCAN_INTERVAL = timedelta(minutes=1)
 
@@ -96,8 +129,8 @@ class NovelAnLADV9Sensor(CoordinatorEntity, SensorEntity):
 
         # Make unique ID specific to this IP
         ip_id = coordinator.ip_address.replace('.', '_')
-        self._attr_unique_id = f"{DOMAIN}_{ip_id}_{name}"
-        self._attr_name = name.replace('_', ' ')
+        self._attr_unique_id = f"{DOMAIN}_{ip_id}_{_slugify(name)}"
+        self._attr_name = _format_display_name(name)
 
         # Assign device info
         self._attr_device_info = device_info

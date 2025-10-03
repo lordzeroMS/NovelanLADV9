@@ -27,6 +27,26 @@ class ControlCommandError(Exception):
     """Raised when the heat pump rejects a control command."""
 
 
+def _normalize_label(raw) -> str:
+    """Extract a readable label from XML fragments."""
+    if isinstance(raw, list):
+        for item in raw:
+            text = _normalize_label(item)
+            if text:
+                return text
+        return ""
+    if isinstance(raw, dict):
+        for key in ("#text", "@name", "name"):
+            if key in raw:
+                text = _normalize_label(raw[key])
+                if text:
+                    return text
+        return ""
+    if raw is None:
+        return ""
+    return str(raw)
+
+
 def determine_sensor_type(reading_name, reading_value):
     if "Temperaturen" in reading_name:
         if "°C" in str(reading_value):
@@ -88,7 +108,7 @@ async def fetch_data(ip_address, pin="999999"):
         if isinstance(content_items, dict):
             content_items = [content_items]
         for group in content_items:
-            gname = group.get('name')
+            gname = _normalize_label(group.get('name')).strip()
             items = group.get('item')
             if isinstance(items, dict):
                 items = [items]
@@ -97,7 +117,7 @@ async def fetch_data(ip_address, pin="999999"):
             for it in items:
                 if not isinstance(it, dict):
                     continue
-                name = it.get('name')
+                name = _normalize_label(it.get('name')).strip()
                 value = it.get('value')
                 if gname and name is not None:
                     key = f"{gname}_{name}"
@@ -111,16 +131,67 @@ async def fetch_controls(ip_address, pin="999999"):
     ws_com_login = f"LOGIN;{pin}"
 
     async with websockets.connect(ws_url, subprotocols=['Lux_WS'], open_timeout=5, ping_timeout=10, close_timeout=2) as websocket:
-        res = {}
         await websocket.send(ws_com_login)
         greeting = await websocket.recv()
         d = xmltodict.parse(greeting)
-        settings = [c for c in d['Navigation']['item'] if c['name'] == 'Einstellungen'][0]
-        operate_id = [c for c in settings['item'] if c['name'] == 'Betriebsart'][0]['@id']
+        nav_items = d['Navigation']['item']
+        if isinstance(nav_items, dict):
+            nav_items = [nav_items]
+
+        def _match_name(node, candidates):
+            name = _normalize_label(node.get('name')).strip() if node else ""
+            return name in candidates
+
+        settings = next((c for c in nav_items if _match_name(c, {"Einstellungen", "Settings"})), None)
+        if not settings:
+            return []
+
+        settings_items = settings.get('item')
+        if isinstance(settings_items, dict):
+            settings_items = [settings_items]
+
+        operate = next((c for c in settings_items or [] if _match_name(c, {"Betriebsart"})), None)
+        if not operate or '@id' not in operate:
+            return []
+
+        operate_id = operate['@id']
         await websocket.send(f"GET;{operate_id}")
         p = await websocket.recv()
-        d = xmltodict.parse(p)
-        return d['Content']['item']
+        content = xmltodict.parse(p)
+
+        items = content.get('Content', {}).get('item', [])
+        if isinstance(items, dict):
+            items = [items]
+
+        controls: list[dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = _normalize_label(item.get('name')).strip()
+            if not name:
+                continue
+            options = item.get('option')
+            if isinstance(options, dict):
+                options = [options]
+            normalized_options = []
+            if isinstance(options, list):
+                for opt in options:
+                    if not isinstance(opt, dict):
+                        continue
+                    normalized_options.append({
+                        'value': opt.get('@value'),
+                        'label': _normalize_label(opt.get('#text') or opt.get('value')).strip(),
+                    })
+            controls.append({
+                '@id': item.get('@id'),
+                'name': name,
+                'value': item.get('value'),
+                'raw': item.get('raw'),
+                'options': normalized_options,
+                'page_id': operate_id,
+            })
+
+        return controls
 
 
 async def fetch_setpoints(ip_address, pin="999999"):
@@ -140,23 +211,31 @@ async def fetch_setpoints(ip_address, pin="999999"):
     }
 
     def collect_controls(root):
-        found = {}
-        def walk(x):
-            if isinstance(x, dict):
-                name = x.get('name')
+        found: dict[str, dict[str, str]] = {}
+
+        def walk(node, parent_id=None):
+            if isinstance(node, dict):
+                current_id = node.get('@id') or parent_id
+                name = node.get('name')
                 if isinstance(name, list):
                     name = name[0] if name else None
-                if name in targets and ('@id' in x) and ('value' in x or 'option' in x):
-                    found[name] = {
-                        'id': x.get('@id'),
-                        'name': name,
-                        'value': x.get('value'),
-                    }
-                for v in x.values():
-                    walk(v)
-            elif isinstance(x, list):
-                for v in x:
-                    walk(v)
+                if name and ('@id' in node) and ('value' in node or 'option' in node):
+                    label = _normalize_label(name).strip()
+                    if label:
+                        found[label] = {
+                            'id': node.get('@id'),
+                            'name': label,
+                            'value': node.get('value'),
+                            'raw': node.get('raw'),
+                            'options': node.get('option'),
+                            'page_id': parent_id,
+                        }
+                for value in node.values():
+                    walk(value, current_id)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value, parent_id)
+
         walk(root)
         return found
 
@@ -186,11 +265,23 @@ async def fetch_setpoints(ip_address, pin="999999"):
 
         return results
 
-async def set_control(ip_address, pin, control_id, value):
+async def set_control(ip_address, pin, control_id, value, page_id=None, label=None):
     ws_url = f"ws://{ip_address}:8214/"
     ws_com_login = f"LOGIN;{pin}"
 
-    set_sent = False
+    responses: list[str] = []
+
+    async def _recv_optional(websocket):
+        try:
+            msg = await asyncio.wait_for(websocket.recv(), timeout=5)
+        except (asyncio.TimeoutError, ConnectionClosedError, ConnectionClosed, ConnectionClosedOK):
+            return None
+        except Exception as err:  # pragma: no cover - unforeseen read failure
+            LOGGER.debug("Unexpected read error after command: %s", err)
+            return None
+        else:
+            responses.append(msg)
+            return msg
 
     try:
         async with websockets.connect(
@@ -201,86 +292,132 @@ async def set_control(ip_address, pin, control_id, value):
             close_timeout=2,
         ) as websocket:
             await websocket.send(ws_com_login)
-            await websocket.recv()  # greeting
-            LOGGER.info(
-                "Sending SET for %s on %s with payload '%s'",
-                control_id,
-                ip_address,
-                value,
-            )
-            await websocket.send(f"SET;{control_id};{value}")
-            set_sent = True
+            greeting = await _recv_optional(websocket)
 
-            try:
-                response = await asyncio.wait_for(websocket.recv(), timeout=5)
-            except ConnectionClosedError as err:
-                LOGGER.warning(
-                    "Control %s closed with error without response on %s: %s",
-                    control_id,
-                    ip_address,
-                    err,
-                )
-                raise ControlCommandError(err) from err
-            except ConnectionClosed as err:
-                LOGGER.warning(
-                    "Control %s closed without response on %s: %s",
-                    control_id,
-                    ip_address,
-                    err,
-                )
-                raise ControlCommandError(err) from err
-            except asyncio.TimeoutError as err:
-                LOGGER.debug(
-                    "Timed out waiting for response after SET for %s (%s): %s",
-                    control_id,
-                    ip_address,
-                    err,
-                )
-                raise ControlCommandError(err) from err
+            nav_page_id = page_id
+            if greeting:
+                try:
+                    nav_root = xmltodict.parse(greeting)
+                except Exception as err:  # pragma: no cover
+                    LOGGER.debug("Failed to parse navigation payload: %s", err)
+                else:
+                    items = nav_root.get('Navigation', {}).get('item')
+                    if isinstance(items, dict):
+                        items = [items]
+                    if isinstance(items, list):
+                        settings_node = next(
+                            (
+                                node
+                                for node in items
+                                if _normalize_label(node.get('name')).strip() in {"Einstellungen", "Settings"}
+                            ),
+                            None,
+                        )
+                        if settings_node:
+                            children = settings_node.get('item')
+                            if isinstance(children, dict):
+                                children = [children]
+                            if isinstance(children, list):
+                                operate_node = next(
+                                    (
+                                        child
+                                        for child in children
+                                        if isinstance(child, dict)
+                                        and _normalize_label(child.get('name')).strip() == 'Betriebsart'
+                                        and child.get('@id')
+                                    ),
+                                    None,
+                                )
+                                if operate_node:
+                                    nav_page_id = operate_node.get('@id')
 
-            with suppress(ConnectionClosed, ConnectionClosedError, ConnectionClosedOK):
-                await websocket.wait_closed()
+            active_id = control_id
 
-            LOGGER.info(
-                "SET response for %s on %s: %s",
-                control_id,
-                ip_address,
-                response,
-            )
+            if nav_page_id:
+                LOGGER.debug("Opening outer page %s", nav_page_id)
+                await websocket.send(f"GET;{nav_page_id}")
+                outer_payload = await _recv_optional(websocket)
+            else:
+                outer_payload = None
 
-            return response
-    except ConnectionClosedError as err:
-        if set_sent:
-            LOGGER.warning(
-                "Websocket closed with error after SET for %s on %s: %s",
-                control_id,
-                ip_address,
-                err,
-            )
-            raise ControlCommandError(err) from err
-        LOGGER.error(
-            "Connection error before SET for %s on %s: %s",
+            if outer_payload and label:
+                try:
+                    outer_content = xmltodict.parse(outer_payload)
+                except Exception as err:  # pragma: no cover
+                    LOGGER.debug("Failed to parse outer page: %s", err)
+                else:
+                    candidates = outer_content.get('Content', {}).get('item', [])
+                    if isinstance(candidates, dict):
+                        candidates = [candidates]
+                    for candidate in candidates:
+                        if not isinstance(candidate, dict):
+                            continue
+                        if _normalize_label(candidate.get('name')).strip() == label and candidate.get('@id'):
+                            active_id = candidate.get('@id')
+                            break
+
+            if label and not active_id:
+                LOGGER.debug("Falling back to REFRESH lookup for %s", label)
+                await websocket.send("REFRESH")
+                refresh_payload = await _recv_optional(websocket)
+                if refresh_payload:
+                    try:
+                        refresh_content = xmltodict.parse(refresh_payload)
+                    except Exception as err:  # pragma: no cover
+                        LOGGER.debug("Failed to parse refresh payload: %s", err)
+                    else:
+                        items = refresh_content.get('values', {}).get('item', [])
+                        if isinstance(items, dict):
+                            items = [items]
+                        for item in items:
+                            if not isinstance(item, dict):
+                                continue
+                            if _normalize_label(item.get('name')).strip() == label and item.get('@id'):
+                                active_id = item.get('@id')
+                                break
+
+            if not active_id:
+                raise ControlCommandError("Missing control id for set_control")
+
+            prefixed_id = active_id
+            if not str(active_id).startswith("set_"):
+                prefixed_id = f"set_{active_id}"
+
+            set_payload = f"SET;{prefixed_id};{value}"
+            LOGGER.debug("Sending %s", set_payload)
+            await websocket.send(set_payload)
+            await _recv_optional(websocket)
+            await asyncio.sleep(0.05)
+
+            LOGGER.debug("Sending REFRESH (post-SET)")
+            await websocket.send("REFRESH")
+            await _recv_optional(websocket)
+
+            LOGGER.debug("Sending SAVE;1")
+            await websocket.send("SAVE;1")
+            await _recv_optional(websocket)
+
+            LOGGER.debug("Sending REFRESH (post-SAVE)")
+            await websocket.send("REFRESH")
+            refresh = await _recv_optional(websocket)
+
+            LOGGER.debug("Sending final REFRESH")
+            await websocket.send("REFRESH")
+            final_refresh = await _recv_optional(websocket)
+
+            return final_refresh or refresh or (responses[-1] if responses else None)
+    except (ConnectionClosedError, ConnectionClosed) as err:
+        LOGGER.warning(
+            "Websocket closed while setting %s on %s: %s",
             control_id,
             ip_address,
             err,
         )
-        raise ControlCommandError(err) from err
-    except ConnectionClosed as err:
-        if set_sent:
-            LOGGER.warning(
-                "Websocket closed unexpectedly after SET for %s on %s: %s",
-                control_id,
-                ip_address,
-                err,
-            )
+        if responses:
+            return responses[-1]
+        if prefixed_id:
             raise ControlCommandError(err) from err
-        LOGGER.error(
-            "Connection closed before SET for %s on %s: %s",
-            control_id,
-            ip_address,
-            err,
-        )
-        raise ControlCommandError(err) from err
+        return None
     except (asyncio.TimeoutError, WebSocketException, OSError) as err:
         LOGGER.error(
             "Failed to send control command %s on %s: %s",
